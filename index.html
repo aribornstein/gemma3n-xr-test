@@ -2,60 +2,54 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>SmolVLM Webcam Captioning (ONNX in-browser!)</title>
+  <title>SmolVLM 256M Webcam Captioning</title>
   <style>
     body { font-family: sans-serif; padding: 2em; }
-    #webcam { border: 2px solid #333; border-radius: 8px; }
-    #capture { margin: 1em 0; }
-    #caption { font-weight: bold; margin-top: 1em; font-size: 1.1em;}
+    #webcam { border:2px solid #333; border-radius:8px; }
+    #capture { margin:1em 0; }
+    #caption { font-weight:bold; margin-top:1em; font-size:1.1em; }
   </style>
 </head>
 <body>
-  <h1>Take a Picture and Caption it (SmolVLM, in-browser!)</h1>
+  <h1>SmolVLM‑256M Webcam Captioning (WebGPU in Browser)</h1>
   <video id="webcam" autoplay width="320" height="240"></video><br>
   <button id="capture">Capture & Caption</button>
   <canvas id="snapshot" width="320" height="240" style="display:none;"></canvas>
-  <div id="caption"></div>
+  <div id="caption">Loading model...</div>
 
   <script type="module">
     import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@3.7.0";
 
-    // Prefer WebGPU backend for ONNX (if available)
-    env.backends.onnx.wasm.numThreads = 1; // Optional: tweak for perf/memory
-
     const webcam = document.getElementById('webcam');
-    const captureBtn = document.getElementById('capture');
     const canvas = document.getElementById('snapshot');
     const ctx = canvas.getContext('2d');
     const captionDiv = document.getElementById('caption');
+    const captureBtn = document.getElementById('capture');
 
-    // Start webcam
+    env.backends.onnx.wasm.numThreads = 1;
+
     async function startWebcam() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        webcam.srcObject = stream;
-      } catch (e) {
-        alert('Error accessing webcam: ' + e);
+        webcam.srcObject = await navigator.mediaDevices.getUserMedia({ video: true });
+      } catch(e) {
+        alert("Webcam error: " + e);
       }
     }
 
-    captionDiv.textContent = "Loading SmolVLM (ONNX, may take 15–30s first time)...";
-    // Load SmolVLM pipeline (image-to-text)
+    captionDiv.textContent = "Loading SmolVLM-256M model...";
     const captioner = await pipeline(
       'image-to-text',
-      'HuggingFaceTB/SmolVLM-Instruct',
-      { quantized: false } // use quantized: true for smaller, slightly less accurate model
+      'HuggingFaceTB/SmolVLM-256M-Instruct',
+      { use_onnx: true }
     );
-    captionDiv.textContent = "Model loaded! Ready to caption your photos.";
+    captionDiv.textContent = "Model ready!";
 
     captureBtn.onclick = async () => {
       ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
       captionDiv.textContent = "Captioning...";
       try {
-        // Accepts HTMLCanvasElement directly!
-        const prompt = "Describe this image in detail."; // Or change to your desired prompt
-        const output = await captioner(canvas, { prompt });
-        captionDiv.textContent = output[0].generated_text || "[No caption]";
+        const output = await captioner(canvas, { prompt: "Describe this image in detail." });
+        captionDiv.textContent = output[0].generated_text;
       } catch (e) {
         captionDiv.textContent = "Error: " + e;
         console.error(e);
