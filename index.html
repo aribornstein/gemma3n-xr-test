@@ -13,12 +13,11 @@
 <body>
   <h1>SmolVLM‑256M Webcam Captioning (WebGPU in Browser)</h1>
   <video id="webcam" autoplay width="320" height="240"></video><br>
-  <button id="capture">Capture & Caption</button>
+  <button id="capture" disabled>Capture & Caption</button>
   <canvas id="snapshot" width="320" height="240" style="display:none;"></canvas>
   <div id="caption">Loading model...</div>
 
   <script type="module">
-    // ✅ Use the official bundle from the HuggingFace Space!
     import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.6.1";
 
     const webcam = document.getElementById('webcam');
@@ -27,48 +26,67 @@
     const captionDiv = document.getElementById('caption');
     const captureBtn = document.getElementById('capture');
 
-    // Optional: set ONNX WASM threading (not required for WebGPU)
+    // Make sure to only enable the button once everything is ready!
+    captureBtn.disabled = true;
+
     env.backends.onnx.wasm.numThreads = 1;
 
-    async function startWebcam() {
-      try {
-        webcam.srcObject = await navigator.mediaDevices.getUserMedia({ video: true });
-      } catch(e) {
-        alert("Webcam error: " + e);
-      }
+    // Start webcam and resolve when ready
+    function startWebcam() {
+      return new Promise((resolve, reject) => {
+        navigator.mediaDevices.getUserMedia({ video: true })
+          .then(stream => {
+            webcam.srcObject = stream;
+            webcam.onloadedmetadata = () => resolve();
+          })
+          .catch(err => {
+            alert("Webcam error: " + err);
+            reject(err);
+          });
+      });
     }
 
-    captionDiv.textContent = "Loading SmolVLM-256M model (may take 15–30s first time)...";
-    // 👇 The magic: use the custom ONNX pipeline from the Space!
-    const captioner = await pipeline(
-      'image-to-text',
-      'HuggingFaceTB/SmolVLM-256M-Instruct',
-      { use_onnx: true }
-    );
-    captionDiv.textContent = "Model ready!";
+    // Load the model
+    async function main() {
+      captionDiv.textContent = "Loading SmolVLM-256M model (may take 15–30s first time)...";
+      await startWebcam();
+      captionDiv.textContent = "Webcam ready. Loading model (this can take a bit)...";
 
-    captureBtn.onclick = async () => {
-    ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
-    captionDiv.textContent = "Captioning...";
-    try {
-        if (!canvas) throw new Error("Canvas is undefined");
-        if (!captioner) throw new Error("Captioner not loaded");
-        // Try both prompt keys if needed
-        let output;
+      // Load the model
+      const captioner = await pipeline(
+        'image-to-text',
+        'HuggingFaceTB/SmolVLM-256M-Instruct',
+        { use_onnx: true }
+      );
+
+      captionDiv.textContent = "Model ready! Take a picture.";
+
+      // Now that everything is ready, enable the button
+      captureBtn.disabled = false;
+
+      captureBtn.onclick = async () => {
+        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+        captionDiv.textContent = "Captioning...";
         try {
-        output = await captioner(canvas, { prompt: "Describe this image in detail." });
-        } catch (err) {
-        output = await captioner(canvas, { text: "Describe this image in detail." });
+          // Double-check that canvas has valid image data
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          if (!imageData || imageData.data.every(x => x === 0)) {
+            throw new Error("No webcam image captured. Try again!");
+          }
+
+          // Always use { prompt: ... } for SmolVLM
+          const output = await captioner(canvas, { prompt: "Describe this image in detail." });
+
+          // Defensive: check for output structure
+          captionDiv.textContent = output?.[0]?.generated_text ?? "[No caption]";
+        } catch (e) {
+          captionDiv.textContent = "Error: " + (e?.message || e);
+          console.error(e);
         }
-        captionDiv.textContent = output?.[0]?.generated_text ?? "[No caption]";
-    } catch (e) {
-        captionDiv.textContent = "Error: " + e.message;
-        console.error(e);
+      };
     }
-    };
 
-
-    startWebcam();
+    main();
   </script>
 </body>
 </html>
