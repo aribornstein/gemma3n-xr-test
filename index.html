@@ -1,79 +1,286 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>SmolVLM-256M Webcam Captioning (ONNX + WebGPU)</title>
-  <style>
-    body { font-family: sans-serif; padding: 2em; }
-    #webcam { border:2px solid #333; border-radius:8px; }
-    #capture { margin:1em 0; }
-    #caption { font-weight:bold; margin-top:1em; font-size:1.1em; }
-    #canvas { display: none; }
-  </style>
-</head>
-<body>
-  <h1>SmolVLM‑256M Webcam Captioning (WebGPU in Browser)</h1>
-  <video id="webcam" autoplay width="224" height="224"></video><br>
-  <button id="capture" disabled>Capture & Caption</button>
-  <canvas id="canvas" width="224" height="224"></canvas>
-  <div id="caption">Loading model...</div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmolVLM Webcam Captioning App</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        padding: 20px;
+        background-color: #f0f0f0;
+      }
+      .controls, .io-areas {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        background-color: #fff;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      }
+      .io-areas {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      textarea {
+        width: 320px;
+        height: 80px;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      #videoFeed {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 6px;
+        object-fit: cover;
+      }
+      #videoContainer {
+        position: relative;
+        width: 320px;
+        height: 240px;
+        border: 2px solid #333;
+        background-color: #000;
+        border-radius: 8px;
+        margin: 0 auto;
+      }
+      #loadingOverlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: none;
+        justify-content: center;
+        align-items: center;
+        background-color: rgba(0,0,0,0.7);
+        z-index: 10;
+        border-radius: 6px;
+        color: #fff;
+        font-size: 1.5em;
+        font-weight: bold;
+      }
+      #startButton {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        border: none;
+        border-radius: 4px;
+        color: white;
+      }
+      #startButton.start { background-color: #28a745; }
+      #startButton.stop { background-color: #dc3545; }
+      label { font-weight: bold; }
+      select {
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+      }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>SmolVLM Webcam Captioning (WebGPU)</h1>
+    <div id="videoContainer">
+      <video id="videoFeed" autoplay playsinline></video>
+      <div id="loadingOverlay">Loading...</div>
+    </div>
+    <canvas id="canvas" class="hidden"></canvas>
 
-  <script type="module">
-    import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.6.1";
+    <div class="io-areas">
+      <div>
+        <label for="instructionText">Instruction:</label><br />
+        <textarea id="instructionText" name="Instruction">Describe this image in detail.</textarea>
+      </div>
+      <div>
+        <label for="responseText">Response:</label><br />
+        <textarea id="responseText" name="Response" readonly placeholder="Caption will appear here..."></textarea>
+      </div>
+    </div>
 
-    const webcam = document.getElementById('webcam');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const captionDiv = document.getElementById('caption');
-    const captureBtn = document.getElementById('capture');
+    <div class="controls">
+      <label for="intervalSelect">Interval between 2 requests:</label>
+      <select id="intervalSelect" name="Interval">
+        <option value="0" selected>0ms</option>
+        <option value="500">500ms</option>
+        <option value="1000">1s</option>
+        <option value="2000">2s</option>
+      </select>
+      <button id="startButton" class="start">Start</button>
+    </div>
 
-    // Start webcam and resolve when ready
-    function startWebcam() {
-      return new Promise((resolve, reject) => {
-        navigator.mediaDevices.getUserMedia({ video: { width: 224, height: 224 } })
-          .then(stream => {
-            webcam.srcObject = stream;
-            webcam.onloadedmetadata = () => resolve();
-          })
-          .catch(err => {
-            alert("Webcam error: " + err);
-            reject(err);
-          });
-      });
-    }
+    <script type="module">
+      import {
+        AutoProcessor,
+        AutoModelForVision2Seq,
+        RawImage,
+      } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0/dist/transformers.min.js";
 
-    // Run main code
-    async function main() {
-      captureBtn.disabled = true;
-      captionDiv.textContent = "Starting webcam...";
-      await startWebcam();
+      const video = document.getElementById("videoFeed");
+      const canvas = document.getElementById("canvas");
+      const instructionText = document.getElementById("instructionText");
+      const responseText = document.getElementById("responseText");
+      const intervalSelect = document.getElementById("intervalSelect");
+      const startButton = document.getElementById("startButton");
+      const loadingOverlay = document.getElementById("loadingOverlay");
+      let stream, isProcessing = false, processor, model;
 
-      captionDiv.textContent = "Loading SmolVLM-256M (may take up to a minute the first time)...";
-      const captioner = await pipeline(
-        'image-to-text',
-        'HuggingFaceTB/SmolVLM-256M-Instruct',
-        { quantized: false } // You can try true for faster/lighter, but a bit less accurate
-      );
+      async function initModel() {
+        // Use the 256M model for demo speed, or switch to 500M for higher quality
+        const modelId = "HuggingFaceTB/SmolVLM-256M-Instruct";
+        loadingOverlay.style.display = "flex";
+        responseText.value = "Loading processor...";
+        processor = await AutoProcessor.from_pretrained(modelId);
+        responseText.value = "Processor loaded. Loading model (WebGPU)...";
+        model = await AutoModelForVision2Seq.from_pretrained(modelId, {
+          dtype: {
+            embed_tokens: "fp16",
+            vision_encoder: "q4",
+            decoder_model_merged: "q4",
+          },
+          device: "webgpu",
+        });
+        responseText.value = "Model loaded. Initializing camera...";
+        loadingOverlay.style.display = "none";
+      }
 
-      captionDiv.textContent = "Model ready! Click to capture and caption.";
-      captureBtn.disabled = false;
-
-      captureBtn.onclick = async () => {
-        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
-        captionDiv.textContent = "Captioning...";
+      async function initCamera() {
         try {
-          const output = await captioner(canvas, {
-            prompt: "Describe this image in detail."
-          });
-          captionDiv.textContent = output?.[0]?.generated_text ?? "[No caption]";
+          stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false });
+          video.srcObject = stream;
+          responseText.value = "Camera access granted. Ready to start.";
+        } catch (err) {
+          responseText.value = `Camera error: ${err.name} - ${err.message}. Use HTTPS or localhost.`;
+          alert(`Camera error: ${err.name}. Check HTTPS or localhost and camera permissions.`);
+        }
+      }
+
+      function captureImage() {
+        if (!stream || !video.videoWidth) {
+          console.warn("Video stream not ready for capture.");
+          return null;
+        }
+        // Resize/crop image to 224x224 for SmolVLM
+        const size = 224;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        // Center crop the webcam feed to square (for best results)
+        let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
+        if (sw > sh) { sx = (sw - sh) / 2; sw = sh; } else if (sh > sw) { sy = (sh - sw) / 2; sh = sw; }
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, size, size);
+        const frame = ctx.getImageData(0, 0, size, size);
+        return new RawImage(frame.data, frame.width, frame.height, 4);
+      }
+
+      async function runLocalVisionInference(rawImg, instruction) {
+        const messages = [
+          {
+            role: "user",
+            content: [{ type: "image" }, { type: "text", text: instruction }],
+          },
+        ];
+        const text = processor.apply_chat_template(messages, { add_generation_prompt: true });
+        const inputs = await processor(text, [rawImg], { do_image_splitting: false });
+        const generatedIds = await model.generate({ ...inputs, max_new_tokens: 100 });
+        const output = processor.batch_decode(
+          generatedIds.slice(null, [inputs.input_ids.dims.at(-1), null]),
+          { skip_special_tokens: true }
+        );
+        return output[0].trim();
+      }
+
+      async function sendData() {
+        if (!isProcessing) return;
+        const instruction = instructionText.value.trim() || "Describe this image in detail.";
+        const rawImg = captureImage();
+        if (!rawImg) {
+          responseText.value = "Capture failed (is camera ready?)";
+          return;
+        }
+        try {
+          responseText.value = "Processing...";
+          const reply = await runLocalVisionInference(rawImg, instruction);
+          responseText.value = reply;
         } catch (e) {
-          captionDiv.textContent = "Error: " + (e?.message || e);
+          responseText.value = `Error: ${e.message}`;
           console.error(e);
         }
-      };
-    }
+      }
 
-    main();
-  </script>
-</body>
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      async function processingLoop() {
+        const intervalMs = parseInt(intervalSelect.value, 10);
+        while (isProcessing) {
+          await sendData();
+          if (!isProcessing) break;
+          await sleep(intervalMs);
+        }
+      }
+
+      function handleStart() {
+        if (!stream) {
+          responseText.value = "Camera not available. Cannot start.";
+          alert("Camera not available. Please grant permission first.");
+          return;
+        }
+        isProcessing = true;
+        startButton.textContent = "Stop";
+        startButton.classList.replace("start", "stop");
+        instructionText.disabled = true;
+        intervalSelect.disabled = true;
+        responseText.value = "Processing started...";
+        processingLoop();
+      }
+
+      function handleStop() {
+        isProcessing = false;
+        startButton.textContent = "Start";
+        startButton.classList.replace("stop", "start");
+        instructionText.disabled = false;
+        intervalSelect.disabled = false;
+        if (responseText.value.startsWith("Processing started...")) {
+          responseText.value = "Processing stopped.";
+        }
+      }
+
+      startButton.addEventListener("click", () => {
+        if (isProcessing) {
+          handleStop();
+        } else {
+          handleStart();
+        }
+      });
+
+      window.addEventListener("DOMContentLoaded", async () => {
+        // Check for WebGPU support
+        if (!navigator.gpu) {
+          const videoElement = document.getElementById("videoFeed");
+          const warningElement = document.createElement("p");
+          warningElement.textContent = "WebGPU is not available in this browser.";
+          warningElement.style.color = "red";
+          warningElement.style.textAlign = "center";
+          videoElement.parentNode.insertBefore(warningElement, videoElement.nextSibling);
+        }
+        await initModel();
+        await initCamera();
+      });
+
+      window.addEventListener("beforeunload", () => {
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      });
+    </script>
+  </body>
 </html>
