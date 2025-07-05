@@ -64,26 +64,60 @@
       // Now that everything is ready, enable the button
       captureBtn.disabled = false;
 
-      captureBtn.onclick = async () => {
-        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
-        captionDiv.textContent = "Captioning...";
+    captureBtn.onclick = async () => {
+    ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+    captionDiv.textContent = "Captioning...";
+
+    try {
+        // Try all forms—one will work!
+        let output;
+        let success = false;
+
+        // Try standard prompt
         try {
-          // Double-check that canvas has valid image data
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          if (!imageData || imageData.data.every(x => x === 0)) {
-            throw new Error("No webcam image captured. Try again!");
-          }
+        output = await captioner(canvas, { prompt: "Describe this image in detail." });
+        if (output?.[0]?.generated_text) success = true;
+        } catch (err) { console.log('Failed prompt field', err); }
 
-          // Always use { prompt: ... } for SmolVLM
-          const output = await captioner(canvas, { prompt: "Describe this image in detail." });
+        // Try text field
+        if (!success) try {
+        output = await captioner(canvas, { text: "Describe this image in detail." });
+        if (output?.[0]?.generated_text) success = true;
+        } catch (err) { console.log('Failed text field', err); }
 
-          // Defensive: check for output structure
-          captionDiv.textContent = output?.[0]?.generated_text ?? "[No caption]";
-        } catch (e) {
-          captionDiv.textContent = "Error: " + (e?.message || e);
-          console.error(e);
+        // Try direct string
+        if (!success) try {
+        output = await captioner(canvas, "Describe this image in detail.");
+        if (output?.[0]?.generated_text) success = true;
+        } catch (err) { console.log('Failed direct string prompt', err); }
+
+        // Try chat-style messages
+        if (!success) try {
+        output = await captioner(canvas, {
+            messages: [
+            {
+                role: "user",
+                content: [
+                { type: "image" },
+                { type: "text", text: "Describe this image in detail." }
+                ]
+            }
+            ]
+        });
+        if (output?.[0]?.generated_text) success = true;
+        } catch (err) { console.log('Failed chat-style messages', err); }
+
+        if (output?.[0]?.generated_text) {
+        captionDiv.textContent = output[0].generated_text;
+        } else {
+        captionDiv.textContent = "[No caption]";
         }
-      };
+    } catch (e) {
+        captionDiv.textContent = "Error: " + (e?.message || e);
+        console.error(e);
+    }
+    };
+
     }
 
     main();
