@@ -48,16 +48,25 @@
     captionDiv.textContent = "Model ready!";
 
     captureBtn.onclick = async () => {
-      ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
-      captionDiv.textContent = "Captioning...";
-      try {
-        const output = await captioner(canvas, { prompt: "Describe this image in detail." });
-        captionDiv.textContent = output[0].generated_text;
-      } catch (e) {
-        captionDiv.textContent = "Error: " + e;
+    ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+    captionDiv.textContent = "Captioning...";
+    try {
+        if (!canvas) throw new Error("Canvas is undefined");
+        if (!captioner) throw new Error("Captioner not loaded");
+        // Try both prompt keys if needed
+        let output;
+        try {
+        output = await captioner(canvas, { prompt: "Describe this image in detail." });
+        } catch (err) {
+        output = await captioner(canvas, { text: "Describe this image in detail." });
+        }
+        captionDiv.textContent = output?.[0]?.generated_text ?? "[No caption]";
+    } catch (e) {
+        captionDiv.textContent = "Error: " + e.message;
         console.error(e);
-      }
+    }
     };
+
 
     startWebcam();
   </script>
