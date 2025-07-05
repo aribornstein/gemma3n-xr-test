@@ -2,39 +2,35 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>SmolVLM 256M Webcam Captioning</title>
+  <title>SmolVLM-256M Webcam Captioning (ONNX + WebGPU)</title>
   <style>
     body { font-family: sans-serif; padding: 2em; }
     #webcam { border:2px solid #333; border-radius:8px; }
     #capture { margin:1em 0; }
     #caption { font-weight:bold; margin-top:1em; font-size:1.1em; }
+    #canvas { display: none; }
   </style>
 </head>
 <body>
   <h1>SmolVLM‑256M Webcam Captioning (WebGPU in Browser)</h1>
-  <video id="webcam" autoplay width="320" height="240"></video><br>
+  <video id="webcam" autoplay width="224" height="224"></video><br>
   <button id="capture" disabled>Capture & Caption</button>
-  <canvas id="snapshot" width="320" height="240" style="display:none;"></canvas>
+  <canvas id="canvas" width="224" height="224"></canvas>
   <div id="caption">Loading model...</div>
 
   <script type="module">
     import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.6.1";
 
     const webcam = document.getElementById('webcam');
-    const canvas = document.getElementById('snapshot');
+    const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const captionDiv = document.getElementById('caption');
     const captureBtn = document.getElementById('capture');
 
-    // Make sure to only enable the button once everything is ready!
-    captureBtn.disabled = true;
-
-    env.backends.onnx.wasm.numThreads = 1;
-
     // Start webcam and resolve when ready
     function startWebcam() {
       return new Promise((resolve, reject) => {
-        navigator.mediaDevices.getUserMedia({ video: true })
+        navigator.mediaDevices.getUserMedia({ video: { width: 224, height: 224 } })
           .then(stream => {
             webcam.srcObject = stream;
             webcam.onloadedmetadata = () => resolve();
@@ -46,78 +42,35 @@
       });
     }
 
-    // Load the model
+    // Run main code
     async function main() {
-      captionDiv.textContent = "Loading SmolVLM-256M model (may take 15–30s first time)...";
+      captureBtn.disabled = true;
+      captionDiv.textContent = "Starting webcam...";
       await startWebcam();
-      captionDiv.textContent = "Webcam ready. Loading model (this can take a bit)...";
 
-      // Load the model
+      captionDiv.textContent = "Loading SmolVLM-256M (may take up to a minute the first time)...";
       const captioner = await pipeline(
         'image-to-text',
         'HuggingFaceTB/SmolVLM-256M-Instruct',
-        { use_onnx: true }
+        { quantized: false } // You can try true for faster/lighter, but a bit less accurate
       );
 
-      captionDiv.textContent = "Model ready! Take a picture.";
-
-      // Now that everything is ready, enable the button
+      captionDiv.textContent = "Model ready! Click to capture and caption.";
       captureBtn.disabled = false;
 
-    captureBtn.onclick = async () => {
-    ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
-    captionDiv.textContent = "Captioning...";
-
-    try {
-        // Try all forms—one will work!
-        let output;
-        let success = false;
-
-        // Try standard prompt
+      captureBtn.onclick = async () => {
+        ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+        captionDiv.textContent = "Captioning...";
         try {
-        output = await captioner(canvas, { prompt: "Describe this image in detail." });
-        if (output?.[0]?.generated_text) success = true;
-        } catch (err) { console.log('Failed prompt field', err); }
-
-        // Try text field
-        if (!success) try {
-        output = await captioner(canvas, { text: "Describe this image in detail." });
-        if (output?.[0]?.generated_text) success = true;
-        } catch (err) { console.log('Failed text field', err); }
-
-        // Try direct string
-        if (!success) try {
-        output = await captioner(canvas, "Describe this image in detail.");
-        if (output?.[0]?.generated_text) success = true;
-        } catch (err) { console.log('Failed direct string prompt', err); }
-
-        // Try chat-style messages
-        if (!success) try {
-        output = await captioner(canvas, {
-            messages: [
-            {
-                role: "user",
-                content: [
-                { type: "image" },
-                { type: "text", text: "Describe this image in detail." }
-                ]
-            }
-            ]
-        });
-        if (output?.[0]?.generated_text) success = true;
-        } catch (err) { console.log('Failed chat-style messages', err); }
-
-        if (output?.[0]?.generated_text) {
-        captionDiv.textContent = output[0].generated_text;
-        } else {
-        captionDiv.textContent = "[No caption]";
+          const output = await captioner(canvas, {
+            prompt: "Describe this image in detail."
+          });
+          captionDiv.textContent = output?.[0]?.generated_text ?? "[No caption]";
+        } catch (e) {
+          captionDiv.textContent = "Error: " + (e?.message || e);
+          console.error(e);
         }
-    } catch (e) {
-        captionDiv.textContent = "Error: " + (e?.message || e);
-        console.error(e);
-    }
-    };
-
+      };
     }
 
     main();
